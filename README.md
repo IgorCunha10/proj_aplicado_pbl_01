@@ -218,8 +218,14 @@ Insertion Sort:
 ## Código da Primeira Sessão
 
 https://file.kiwi/41ae6440#Y6QqGupPteNa4ZYvT2ZuYw
+
 ---
 
+## Relatório Final
+
+https://docs.google.com/document/d/1JGiEDm0DdEIdJZSjiiIZjSnrbbFYuGr7/edit?pli=1
+
+--
 Projeto acadêmico desenvolvido para estudo de:
 
 * Estruturas de Dados

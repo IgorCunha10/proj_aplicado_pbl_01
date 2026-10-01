@@ -1,19 +1,41 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#define HASH_SIZE 200003
+
+// ============================================================================
+// ESTRUTURA DO PACIENTE
+// ============================================================================
 
 typedef struct {
     char cpf[15];
     char nome[100];
     char nascimento[11];
-}
-Paciente;
+    int ativo_na_fila;
+} Paciente;
 
-typedef struct {
+// ============================================================================
+// ESTRUTURA DA TABELA HASH
+// ============================================================================
+
+typedef struct HashNode {
     Paciente paciente;
-    int risco;
-    int ordemEntrada;
-} PacienteFila;
+    struct HashNode *prox;
+} HashNode;
+
+// ============================================================================
+// ESTRUTURA PARA HISTÓRICO DE ATENDIDOS
+// ============================================================================
 
 typedef struct {
     Paciente paciente;
@@ -22,373 +44,611 @@ typedef struct {
     int ordemAtendimento;
 } PacienteAtendido;
 
+// ============================================================================
+// CADASTRO
+// ============================================================================
+
 Paciente *cadastro = NULL;
 int totalPacientes = 0;
 
-PacienteFila *fila = NULL;
-int tamanhoFila = 0;
-
 PacienteAtendido *atendidos = NULL;
 int totalAtendidos = 0;
+int atendidosCap = 0;
 
 int relogio_eventos = 0;
 
-int cadastrar(const char *cpf, const char *nome, const char *nascimento) {
+// ============================================================================
+// ESTRUTURAS DO HEAP E LAZY DELETION
+// ============================================================================
 
-    for (int i = 0; i < totalPacientes; i++) {
+typedef struct {
+    Paciente paciente;
+    int risco;
+    int ordemEntrada;
+    int ativo;
+} ElementoHeap;
 
-        if (strcmp(cadastro[i].cpf, cpf) == 0) {
-            return 0;
-        }
-    }
+// ============================================================================
+// MIN-HEAP
+// ============================================================================
 
-    Paciente *temp = realloc(
-        cadastro,
-        (totalPacientes + 1) * sizeof(Paciente)
-    );
+typedef struct {
+    ElementoHeap *dados;
+    int tamanho;
+    int capacidade;
+} HeapFila;
 
-    if (temp == NULL) {
-        return 0;
-    }
+HeapFila *fila = NULL;
 
-    cadastro = temp;
+int fila_ativos = 0;
 
-    strcpy(cadastro[totalPacientes].cpf, cpf);
-    strcpy(cadastro[totalPacientes].nome, nome);
-    strcpy(cadastro[totalPacientes].nascimento, nascimento);
+// ============================================================================
+// TABELA HASH
+// ============================================================================
 
-    totalPacientes++;
+HashNode *tabela_hash[HASH_SIZE];
 
-    return 1;
-}
+// ============================================================================
+// FUNÇÃO PARA INICIALIZAR O HEAP
+// ============================================================================
 
-Paciente *buscar_cadastro(const char *cpf) {
+HeapFila* criar_heap(int capacidadeInicial) {
+    HeapFila *h = (HeapFila*) malloc(sizeof(HeapFila));
+    if (!h) return NULL;
 
-    for (int i = 0; i < totalPacientes; i++) {
-
-        if (strcmp(cadastro[i].cpf, cpf) == 0) {
-            return &cadastro[i];
-        }
-    }
-
-    return NULL;
-}
-
-int dar_entrada(const char *cpf, int risco) {
-
-    Paciente *paciente = buscar_cadastro(cpf);
-
-    if (paciente == NULL) {
-        return 0;
-    }
-
-    for (int i = 0; i < tamanhoFila; i++) {
-
-        if (strcmp(fila[i].paciente.cpf, cpf) == 0) {
-            return 0;
-        }
-    }
-
-    PacienteFila *temp = realloc(
-        fila,
-        (tamanhoFila + 1) * sizeof(PacienteFila)
-    );
-
-    if (temp == NULL) {
-        return 0;
-    }
-
-    fila = temp;
-
-    fila[tamanhoFila].paciente = *paciente;
-    fila[tamanhoFila].risco = risco;
-    fila[tamanhoFila].ordemEntrada = relogio_eventos;
-    relogio_eventos++;
-
-    tamanhoFila++;
-
-    return 1;
-}
-
-PacienteFila *chamar_proximo() {
-
-    if (tamanhoFila == 0) {
+    h->dados = (ElementoHeap*) malloc(capacidadeInicial * sizeof(ElementoHeap));
+    if (!h->dados) {
+        free(h);
         return NULL;
     }
-
-    int indiceMelhor = 0;
-
-    for (int i = 1; i < tamanhoFila; i++) {
-
-        if (fila[i].risco < fila[indiceMelhor].risco) {
-
-            indiceMelhor = i;
-
-        } else if (
-            fila[i].risco == fila[indiceMelhor].risco &&
-            fila[i].ordemEntrada < fila[indiceMelhor].ordemEntrada
-        ) {
-
-            indiceMelhor = i;
-        }
-    }
-
-    PacienteFila *resultado = malloc(sizeof(PacienteFila));
-
-    if (resultado == NULL) {
-        return NULL;
-    }
-
-    *resultado = fila[indiceMelhor];
-
-    PacienteAtendido *temp = realloc(
-        atendidos,
-        (totalAtendidos + 1) * sizeof(PacienteAtendido)
-    );
-
-    if (temp == NULL) {
-        free(resultado);
-        return NULL;
-    }
-
-    atendidos = temp;
-
-    atendidos[totalAtendidos].paciente = resultado->paciente;
-    atendidos[totalAtendidos].risco = resultado->risco;
-    atendidos[totalAtendidos].ordemEntrada =
-        resultado->ordemEntrada;
-    atendidos[totalAtendidos].ordemAtendimento = relogio_eventos;
-    relogio_eventos++;
-
-    totalAtendidos++;
-
-    for (int i = indiceMelhor; i < tamanhoFila - 1; i++) {
-        fila[i] = fila[i + 1];
-    }
-
-    tamanhoFila--;
-
-    if (tamanhoFila == 0) {
-
-        free(fila);
-        fila = NULL;
-
-    } else {
-
-        PacienteFila *novaFila = realloc(
-            fila,
-            tamanhoFila * sizeof(PacienteFila)
-        );
-
-        if (novaFila != NULL) {
-            fila = novaFila;
-        }
-    }
-
-    return resultado;
+    h->tamanho = 0;
+    h->capacidade = capacidadeInicial;
+    return h;
 }
 
-int desistir(const char *cpf) {
+// ============================================================================
+// COMPARADOR DE PRIORIDADE
+// ============================================================================
 
-    int indice = -1;
+int tem_maior_prioridade(const ElementoHeap *a, const ElementoHeap *b) {
+    if (a->risco != b->risco) {
+        return a->risco < b->risco;
+    }
+    return a->ordemEntrada < b->ordemEntrada;
+}
 
-    for (int i = 0; i < tamanhoFila; i++) {
+// ============================================================================
+// TROCAR ELEMENTOS
+// ============================================================================
 
-        if (strcmp(fila[i].paciente.cpf, cpf) == 0) {
-            indice = i;
+void trocar_elementos(ElementoHeap *a, ElementoHeap *b) {
+    ElementoHeap temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+// ============================================================================
+// SIFT-UP
+// ============================================================================
+
+void subir_heap(HeapFila *h, int idx) {
+    while (idx > 0) {
+        int pai = (idx - 1) / 2;
+        if (tem_maior_prioridade(&h->dados[idx], &h->dados[pai])) {
+            trocar_elementos(&h->dados[idx], &h->dados[pai]);
+            idx = pai;
+        } else {
             break;
         }
     }
+}
 
-    if (indice == -1) {
+// ============================================================================
+// SIFT-DOWN
+// ============================================================================
+
+void descer_heap(HeapFila *h, int idx) {
+    int menor = idx;
+    int esq = 2 * idx + 1;
+    int dir = 2 * idx + 2;
+
+    if (esq < h->tamanho && tem_maior_prioridade(&h->dados[esq], &h->dados[menor])) {
+        menor = esq;
+    }
+    if (dir < h->tamanho && tem_maior_prioridade(&h->dados[dir], &h->dados[menor])) {
+        menor = dir;
+    }
+    if (menor != idx) {
+        trocar_elementos(&h->dados[idx], &h->dados[menor]);
+        descer_heap(h, menor);
+    }
+}
+
+// ============================================================================
+// CADASTRO ORIGINAL
+// ============================================================================
+
+int cadastrar_vetor(const char *cpf, const char *nome, const char *nascimento) {
+    if (strlen(cpf) >= sizeof(cadastro[0].cpf) ||
+        strlen(nome) >= sizeof(cadastro[0].nome) ||
+        strlen(nascimento) >= sizeof(cadastro[0].nascimento)) {
         return 0;
     }
 
-    for (int i = indice; i < tamanhoFila - 1; i++) {
-        fila[i] = fila[i + 1];
+    for (int i = 0; i < totalPacientes; i++) {
+        if (strcmp(cadastro[i].cpf, cpf) == 0) return 0;
     }
 
-    tamanhoFila--;
+    Paciente *temp = realloc(cadastro, (totalPacientes + 1) * sizeof(Paciente));
+    if (temp == NULL) return 0;
+    cadastro = temp;
 
-    if (tamanhoFila == 0) {
+    snprintf(cadastro[totalPacientes].cpf, sizeof(cadastro[totalPacientes].cpf), "%s", cpf);
+    snprintf(cadastro[totalPacientes].nome, sizeof(cadastro[totalPacientes].nome), "%s", nome);
+    snprintf(cadastro[totalPacientes].nascimento, sizeof(cadastro[totalPacientes].nascimento), "%s", nascimento);
+    cadastro[totalPacientes].ativo_na_fila = 0;
 
-        free(fila);
-        fila = NULL;
-
-    } else {
-
-        PacienteFila *temp = realloc(
-            fila,
-            tamanhoFila * sizeof(PacienteFila)
-        );
-
-        if (temp != NULL) {
-            fila = temp;
-        }
-    }
-
-    relogio_eventos++;
+    totalPacientes++;
     return 1;
 }
 
-int tamanho_fila() {
-    return tamanhoFila;
+// ============================================================================
+// FUNÇÃO HASH
+// ============================================================================
+
+unsigned long hash_function(const char *cpf) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = *cpf++)) {
+        hash = ((hash << 5) + hash) + c;
+    }
+    return hash % HASH_SIZE;
 }
 
-void relatorio_do_dia() {
+// ============================================================================
+// BUSCAR CADASTRO
+// ============================================================================
 
-    printf("\n===== RELATORIO DO DIA =====\n");
+Paciente *buscar_cadastro(const char *cpf) {
+    unsigned long indice = hash_function(cpf);
+    HashNode *atual = tabela_hash[indice];
 
-    if (totalAtendidos == 0) {
-        printf("Nenhum paciente atendido.\n");
+    while (atual != NULL) {
+        if (strcmp(atual->paciente.cpf, cpf) == 0) {
+            return &(atual->paciente);
+        }
+        atual = atual->prox;
+    }
+    return NULL;
+}
+
+// ============================================================================
+// CADASTRAR NA TABELA HASH
+// ============================================================================
+
+int cadastrar(const char *cpf, const char *nome, const char *nascimento) {
+    if (strlen(cpf) >= sizeof(((Paciente*)0)->cpf) ||
+        strlen(nome) >= sizeof(((Paciente*)0)->nome) ||
+        strlen(nascimento) >= sizeof(((Paciente*)0)->nascimento)) {
+        return 0;
+    }
+
+    if (buscar_cadastro(cpf) != NULL) return 0;
+
+    unsigned long indice = hash_function(cpf);
+    HashNode *novo = malloc(sizeof(HashNode));
+    if (novo == NULL) return 0;
+
+    snprintf(novo->paciente.cpf, sizeof(novo->paciente.cpf), "%s", cpf);
+    snprintf(novo->paciente.nome, sizeof(novo->paciente.nome), "%s", nome);
+    snprintf(novo->paciente.nascimento, sizeof(novo->paciente.nascimento), "%s", nascimento);
+    novo->paciente.ativo_na_fila = 0;
+
+    novo->prox = tabela_hash[indice];
+    tabela_hash[indice] = novo;
+    return 1;
+}
+
+// ============================================================================
+// R3 - DAR ENTRADA
+// ============================================================================
+
+int dar_entrada(const char *cpf, int risco) {
+    Paciente *paciente = buscar_cadastro(cpf);
+    if (paciente == NULL) return 0;
+    if (paciente->ativo_na_fila == 1) return 0;
+
+    if (fila == NULL) {
+        fila = criar_heap(10);
+        if (fila == NULL) return 0;
+    }
+
+    if (fila->tamanho == fila->capacidade) {
+        int novaCapacidade = fila->capacidade * 2;
+        ElementoHeap *temp = realloc(fila->dados, novaCapacidade * sizeof(ElementoHeap));
+        if (!temp) return 0;
+        fila->dados = temp;
+        fila->capacidade = novaCapacidade;
+    }
+
+    int pos = fila->tamanho;
+    paciente->ativo_na_fila = 1;
+
+    fila->dados[pos].paciente = *paciente;
+    fila->dados[pos].risco = risco;
+    fila->dados[pos].ordemEntrada = relogio_eventos;
+    fila->dados[pos].ativo = 1;
+
+    relogio_eventos++;
+    fila->tamanho++;
+    fila_ativos++;
+
+    subir_heap(fila, pos);
+    return 1;
+}
+
+// ============================================================================
+// R4 - CHAMAR PRÓXIMO
+// ============================================================================
+
+PacienteAtendido *chamar_proximo() {
+    if (fila == NULL || fila->tamanho == 0) return NULL;
+
+    while (fila->tamanho > 0) {
+        if (fila->dados[0].ativo != 1) {
+            fila->dados[0] = fila->dados[fila->tamanho - 1];
+            fila->tamanho--;
+            if (fila->tamanho > 0) descer_heap(fila, 0);
+            continue;
+        }
+
+        PacienteAtendido *resultado = malloc(sizeof(PacienteAtendido));
+        if (resultado == NULL) return NULL;
+
+        if (totalAtendidos == atendidosCap) {
+            int novaCap = (atendidosCap == 0) ? 16 : atendidosCap * 2;
+            PacienteAtendido *temp = realloc(atendidos, novaCap * sizeof(PacienteAtendido));
+            if (temp == NULL) {
+                free(resultado);
+                return NULL;
+            }
+            atendidos = temp;
+            atendidosCap = novaCap;
+        }
+
+        ElementoHeap topo = fila->dados[0];
+        fila->dados[0] = fila->dados[fila->tamanho - 1];
+        fila->tamanho--;
+        if (fila->tamanho > 0) descer_heap(fila, 0);
+
+        resultado->paciente = topo.paciente;
+        resultado->risco = topo.risco;
+        resultado->ordemEntrada = topo.ordemEntrada;
+        resultado->ordemAtendimento = relogio_eventos;
+        relogio_eventos++;
+
+        Paciente *paciente = buscar_cadastro(topo.paciente.cpf);
+        if (paciente != NULL) paciente->ativo_na_fila = 0;
+
+        resultado->paciente.ativo_na_fila = 0;
+        fila_ativos--;
+
+        atendidos[totalAtendidos] = *resultado;
+        totalAtendidos++;
+        return resultado;
+    }
+    return NULL;
+}
+
+// ============================================================================
+// R5 - DESISTIR
+// ============================================================================
+
+int desistir(const char *cpf) {
+    if (fila == NULL || fila->tamanho == 0) return 0;
+    Paciente *paciente = buscar_cadastro(cpf);
+    if (paciente == NULL || paciente->ativo_na_fila != 1) return 0;
+
+    for (int i = 0; i < fila->tamanho; i++) {
+        if (fila->dados[i].ativo == 1 && strcmp(fila->dados[i].paciente.cpf, cpf) == 0) {
+            fila->dados[i].ativo = 0;
+            paciente->ativo_na_fila = 0;
+            fila_ativos--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// ============================================================================
+// R6 - TAMANHO DA FILA
+// ============================================================================
+
+int tamanho_fila() {
+    return fila_ativos;
+}
+
+// ============================================================================
+// LIBERAR TABELA HASH
+// ============================================================================
+
+void liberar_tabela_hash() {
+    for (int i = 0; i < HASH_SIZE; i++) {
+        HashNode *atual = tabela_hash[i];
+        while (atual != NULL) {
+            HashNode *temp = atual;
+            atual = atual->prox;
+            free(temp);
+        }
+        tabela_hash[i] = NULL;
+    }
+}
+
+// ============================================================================
+// LIBERAR MEMÓRIA
+// ============================================================================
+
+void liberar_memoria() {
+    free(cadastro);
+    if (fila != NULL) {
+        free(fila->dados);
+        free(fila);
+        fila = NULL;
+    }
+    free(atendidos);
+    cadastro = NULL;
+    atendidos = NULL;
+    liberar_tabela_hash();
+}
+
+// ============================================================================
+// RESETAR SISTEMA
+// ============================================================================
+
+void resetar_sistema() {
+    liberar_memoria();
+    totalPacientes = 0;
+    totalAtendidos = 0;
+    atendidosCap = 0;
+    fila_ativos = 0;
+    relogio_eventos = 0;
+}
+
+// ============================================================================
+// TIMER DE ALTA RESOLUCAO
+// ============================================================================
+
+#ifdef _WIN32
+double tempo_agora() {
+    LARGE_INTEGER freq, cont;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&cont);
+    return (double)cont.QuadPart / (double)freq.QuadPart;
+}
+#else
+double tempo_agora() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+#endif
+
+// ============================================================================
+// TESTE DOS GARGALOS
+// ============================================================================
+
+void testar_gargalos(int N) {
+    char cpf_temp[15];
+    double inicio, fim;
+    int repeticoes = 1000;
+
+    resetar_sistema();
+    printf("--- Testando FASE 3 (HEAP) para N = %d registros ---\n", N);
+
+    for (int i = 0; i < N; i++) {
+        sprintf(cpf_temp, "%011d", i);
+        cadastrar(cpf_temp, "Paciente", "01/01/2000");
+        int risco = (rand() % 5) + 1;
+        dar_entrada(cpf_temp, risco);
+    }
+    sprintf(cpf_temp, "%011d", N - 1);
+
+    // R2
+    inicio = tempo_agora();
+    volatile Paciente *resultado_busca = NULL;
+    for (int j = 0; j < repeticoes; j++) {
+        resultado_busca = buscar_cadastro(cpf_temp);
+    }
+    (void)resultado_busca;
+    fim = tempo_agora();
+    printf("Tempo R2 (Busca): %.8f segundos (Media)\n", (fim - inicio) / repeticoes);
+
+    // R4
+    inicio = tempo_agora();
+    for (int j = 0; j < repeticoes; j++) {
+        PacienteAtendido *p = chamar_proximo();
+        if (p != NULL) free(p);
+    }
+    fim = tempo_agora();
+    printf("Tempo R4 (Chamada no Heap - O(log N)): %.8f segundos (Media)\n\n", (fim - inicio) / repeticoes);
+}
+
+// ============================================================================
+// INSERTION SORT (CORRIGIDO PARA ORDENAR POR ESPERA, DECRESCENTE)
+// ============================================================================
+
+void insertion_sort(PacienteAtendido vetor[], int tamanho) {
+    for (int i = 1; i < tamanho; i++) {
+        PacienteAtendido atual = vetor[i];
+        int espera_atual = atual.ordemAtendimento - atual.ordemEntrada;
+
+        int j = i - 1;
+        while (j >= 0) {
+            int espera_j = vetor[j].ordemAtendimento - vetor[j].ordemEntrada;
+
+            // Queremos ordem decrescente, então empurramos para a direita
+            // se o elemento anterior tiver esperado MENOS que o atual
+            if (espera_j < espera_atual) {
+                vetor[j + 1] = vetor[j];
+                j--;
+            } else {
+                break;
+            }
+        }
+        vetor[j + 1] = atual;
+    }
+}
+
+// ============================================================================
+// INTERCALAR (CORRIGIDO PARA ORDENAR POR ESPERA, DECRESCENTE)
+// ============================================================================
+
+void intercalar(PacienteAtendido vetor[], PacienteAtendido auxiliar[], int inicio, int meio, int fim) {
+    int i = inicio;
+    int j = meio + 1;
+    int k = inicio;
+
+    while (i <= meio && j <= fim) {
+        int espera_i = vetor[i].ordemAtendimento - vetor[i].ordemEntrada;
+        int espera_j = vetor[j].ordemAtendimento - vetor[j].ordemEntrada;
+
+        // Decrescente: o maior tempo de espera tem preferência
+        if (espera_i >= espera_j) {
+            auxiliar[k] = vetor[i];
+            i++;
+        } else {
+            auxiliar[k] = vetor[j];
+            j++;
+        }
+        k++;
+    }
+
+    while (i <= meio) {
+        auxiliar[k] = vetor[i];
+        i++;
+        k++;
+    }
+    while (j <= fim) {
+        auxiliar[k] = vetor[j];
+        j++;
+        k++;
+    }
+
+    for (i = inicio; i <= fim; i++) {
+        vetor[i] = auxiliar[i];
+    }
+}
+
+// ============================================================================
+// MERGE SORT RECURSIVO
+// ============================================================================
+
+void merge_sort_recursivo(PacienteAtendido vetor[], PacienteAtendido auxiliar[], int inicio, int fim) {
+    if (inicio >= fim) return;
+    int meio = inicio + (fim - inicio) / 2;
+
+    merge_sort_recursivo(vetor, auxiliar, inicio, meio);
+    merge_sort_recursivo(vetor, auxiliar, meio + 1, fim);
+    intercalar(vetor, auxiliar, inicio, meio, fim);
+}
+
+// ============================================================================
+// MERGE SORT
+// ============================================================================
+
+void merge_sort(PacienteAtendido vetor[], int tamanho) {
+    PacienteAtendido *auxiliar = malloc(tamanho * sizeof(PacienteAtendido));
+    if (auxiliar == NULL) {
+        printf("Erro ao alocar memoria para Merge Sort.\n");
+        return;
+    }
+    merge_sort_recursivo(vetor, auxiliar, 0, tamanho - 1);
+    free(auxiliar);
+}
+
+// ============================================================================
+// GERAR REGISTROS (CORRIGIDO PARA GERAR TEMPOS DE ESPERA VARIADOS)
+// ============================================================================
+
+void gerar_registros_atendimento(PacienteAtendido vetor[], int tamanho) {
+    for (int i = 0; i < tamanho; i++) {
+        memset(&vetor[i], 0, sizeof(PacienteAtendido));
+        vetor[i].risco = (rand() % 5) + 1;
+        vetor[i].ordemEntrada = i;
+
+        // Simula um tempo de atendimento aleatório maior que a ordem de entrada
+        // para gerar tempos de espera diferentes e testar a ordenação corretamente
+        vetor[i].ordemAtendimento = i + (rand() % 1000);
+    }
+
+    for (int i = tamanho - 1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        PacienteAtendido temp = vetor[i];
+        vetor[i] = vetor[j];
+        vetor[j] = temp;
+    }
+}
+
+// ============================================================================
+// TESTE R7
+// ============================================================================
+
+void testar_ordenacao_R7(int M) {
+    printf("=============================================\n");
+    printf("R7 - Ordenacao com M = %d registros\n", M);
+    printf("=============================================\n");
+
+    PacienteAtendido *original = malloc(M * sizeof(PacienteAtendido));
+    PacienteAtendido *vetorInsertion = malloc(M * sizeof(PacienteAtendido));
+    PacienteAtendido *vetorMerge = malloc(M * sizeof(PacienteAtendido));
+
+    if (original == NULL || vetorInsertion == NULL || vetorMerge == NULL) {
+        printf("Erro ao alocar memoria.\n");
+        free(original);
+        free(vetorInsertion);
+        free(vetorMerge);
         return;
     }
 
-    for (int i = 0; i < totalAtendidos; i++) {
+    gerar_registros_atendimento(original, M);
+    memcpy(vetorInsertion, original, M * sizeof(PacienteAtendido));
+    memcpy(vetorMerge, original, M * sizeof(PacienteAtendido));
 
-        for (int j = i + 1; j < totalAtendidos; j++) {
+    double inicio = tempo_agora();
+    insertion_sort(vetorInsertion, M);
+    double fim = tempo_agora();
+    double tempoInsertion = fim - inicio;
 
-            int esperaI =
-                atendidos[i].ordemAtendimento -
-                atendidos[i].ordemEntrada;
+    inicio = tempo_agora();
+    merge_sort(vetorMerge, M);
+    fim = tempo_agora();
+    double tempoMerge = fim - inicio;
 
-            int esperaJ =
-                atendidos[j].ordemAtendimento -
-                atendidos[j].ordemEntrada;
+    printf("Insertion Sort: %.6f segundos\n", tempoInsertion);
+    printf("Merge Sort:     %.6f segundos\n\n", tempoMerge);
 
-            if (esperaJ > esperaI) {
-
-                PacienteAtendido temp = atendidos[i];
-
-                atendidos[i] = atendidos[j];
-
-                atendidos[j] = temp;
-            }
-        }
-    }
-
-    for (int i = 0; i < totalAtendidos; i++) {
-
-        int espera =
-            atendidos[i].ordemAtendimento -
-            atendidos[i].ordemEntrada;
-
-        printf(
-            "%d. %s | CPF: %s | Espera: %d eventos\n",
-            i + 1,
-            atendidos[i].paciente.nome,
-            atendidos[i].paciente.cpf,
-            espera
-        );
-    }
+    free(original);
+    free(vetorInsertion);
+    free(vetorMerge);
 }
 
-void liberar_memoria() {
-
-    free(cadastro);
-    free(fila);
-    free(atendidos);
-
-    cadastro = NULL;
-    fila = NULL;
-    atendidos = NULL;
-}
+// ============================================================================
+// MAIN
+// ============================================================================
 
 int main() {
+    srand(42);
 
-    cadastrar(
-        "111.111.111-11",
-        "Joao",
-        "15/03/2000"
-    );
+    printf("===================================================\n");
+    printf("       BENCHMARK DO PROJETO - FASE 3 (HEAP)        \n");
+    printf("===================================================\n\n");
 
-    cadastrar(
-        "222.222.222-22",
-        "Maria",
-        "20/05/1998"
-    );
+    testar_gargalos(10000);
+    testar_gargalos(100000);
 
-    cadastrar(
-        "333.333.333-33",
-        "Carlos",
-        "10/10/1985"
-    );
+    testar_ordenacao_R7(10000);
+    testar_ordenacao_R7(100000);
 
-    cadastrar(
-        "444.444.444-44",
-        "Ana",
-        "01/01/1990"
-    );
-
-    Paciente *paciente =
-        buscar_cadastro("222.222.222-22");
-
-    if (paciente != NULL) {
-
-        printf(
-            "Paciente encontrado: %s\n",
-            paciente->nome
-        );
-    }
-
-    dar_entrada("111.111.111-11", 3);
-    dar_entrada("222.222.222-22", 1);
-    dar_entrada("333.333.333-33", 2);
-    dar_entrada("444.444.444-44", 1);
-
-    printf(
-        "\nTamanho da fila: %d\n",
-        tamanho_fila()
-    );
-
-    PacienteFila *proximo = chamar_proximo();
-
-    if (proximo != NULL) {
-
-        printf(
-            "Proximo paciente: %s | Risco: %d\n",
-            proximo->paciente.nome,
-            proximo->risco
-        );
-
-        free(proximo);
-    }
-
-    printf(
-        "Tamanho da fila: %d\n",
-        tamanho_fila()
-    );
-
-    if (desistir("333.333.333-33")) {
-
-        printf("Paciente desistiu da fila.\n");
-
-    } else {
-
-        printf("Paciente nao encontrado na fila.\n");
-    }
-
-    printf(
-        "Tamanho da fila: %d\n",
-        tamanho_fila()
-    );
-
-    proximo = chamar_proximo();
-
-    if (proximo != NULL) {
-
-        printf(
-            "Proximo paciente: %s | Risco: %d\n",
-            proximo->paciente.nome,
-            proximo->risco
-        );
-
-        free(proximo);
-    }
-
-    relatorio_do_dia();
-
-    liberar_memoria();
-
+    resetar_sistema();
     return 0;
 }
